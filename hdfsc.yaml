@@ -1,0 +1,7 @@
+apiVersion: hdfs.stackable.tech/v1alpha1
+kind: HdfsCluster
+metadata:
+  name: hdfsc
+spec:
+  namenodeReplicas: 1
+  datanodeReplicas: 3

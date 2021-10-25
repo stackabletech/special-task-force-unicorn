@@ -1,5 +1,5 @@
 [workspace]
-members = ["zookeeper-operator"]
+members = ["zookeeper-operator", "hdfs-operator"]
 
 [patch.crates-io]
 # kube-core = { path = "vendor/kube-core" }
