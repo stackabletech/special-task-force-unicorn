@@ -3,5 +3,6 @@ kind: HdfsCluster
 metadata:
   name: hdfsc
 spec:
-  namenodeReplicas: 1
+  namenodeReplicas: 2
   datanodeReplicas: 3
+  journalnodeReplicas: 3
