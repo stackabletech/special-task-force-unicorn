@@ -270,6 +270,7 @@ pub async fn reconcile_hdfs(
                 }]),
                 selector: Some(journalnode_pod_labels.clone()),
                 cluster_ip: Some("None".to_string()),
+                publish_not_ready_addresses: Some(true),
                 ..ServiceSpec::default()
             }),
             status: None,
