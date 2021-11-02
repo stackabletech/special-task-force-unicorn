@@ -6,3 +6,6 @@ spec:
   namenodeReplicas: 2
   datanodeReplicas: 3
   journalnodeReplicas: 3
+  kerberos:
+    realm: STACKABLE
+    kdc: stackable-krb-kdc.kvm

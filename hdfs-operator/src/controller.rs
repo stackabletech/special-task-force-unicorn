@@ -7,7 +7,8 @@ use k8s_openapi::{
         core::v1::{
             ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EnvVar,
             PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec,
-            ResourceRequirements, Service, ServicePort, ServiceSpec, Volume, VolumeMount,
+            ResourceRequirements, SecretVolumeSource, Service, ServicePort, ServiceSpec, Volume,
+            VolumeMount,
         },
     },
     apimachinery::pkg::{
@@ -55,9 +56,9 @@ fn hadoop_config_xml<I: IntoIterator<Item = (K, V)>, K: AsRef<str>, V: AsRef<str
     kvs: I,
 ) -> String {
     use std::fmt::Write;
-    let mut xml = "<configuration>".to_string();
+    let mut xml = "<configuration>\n".to_string();
     for (k, v) in kvs {
-        write!(
+        writeln!(
             xml,
             "<property><name>{}</name><value>{}</value></property>",
             k.as_ref(),
@@ -101,6 +102,23 @@ fn hadoop_container() -> Container {
                 value: Some("/config".to_string()),
                 ..EnvVar::default()
             },
+            EnvVar {
+                name: "HADOOP_JAAS_DEBUG".to_string(),
+                value: Some("true".to_string()),
+                ..EnvVar::default()
+            },
+            EnvVar {
+                name: "JAVA_TOOL_OPTIONS".to_string(),
+                value: Some(
+                    [
+                        "-Djava.security.krb5.conf=/config/krb5.conf",
+                        // "-Dsun.security.spnego.debug=true",
+                        // "-Dsun.security.krb5.debug=true",
+                    ]
+                    .join(" "),
+                ),
+                ..EnvVar::default()
+            },
         ]),
         volume_mounts: Some(vec![
             VolumeMount {
@@ -111,6 +129,11 @@ fn hadoop_container() -> Container {
             VolumeMount {
                 mount_path: "/config".to_string(),
                 name: "config".to_string(),
+                ..VolumeMount::default()
+            },
+            VolumeMount {
+                mount_path: "/kerberos".to_string(),
+                name: "kerberos".to_string(),
                 ..VolumeMount::default()
             },
         ]),
@@ -174,6 +197,7 @@ pub async fn reconcile_hdfs(
     let mut journalnode_pod_labels = pod_labels.clone();
     journalnode_pod_labels.extend([("role".to_string(), "journalnode".to_string())]);
 
+    let kerberos_realm = hdfs.spec.kerberos.realm.as_deref().unwrap_or("LOCAL");
     let hdfs_site_config = [
         ("dfs.namenode.name.dir".to_string(), "/data".to_string()),
         ("dfs.datanode.data.dir".to_string(), "/data".to_string()),
@@ -214,6 +238,56 @@ pub async fn reconcile_hdfs(
             "true".to_string(),
         ),
         ("ha.zookeeper.quorum".to_string(), "zkc:2181".to_string()),
+        (
+            "dfs.block.access.token.enable".to_string(),
+            "true".to_string(),
+        ),
+        // (
+        //     "dfs.data.transfer.protection".to_string(),
+        //     "authentication".to_string(),
+        // ),
+        // ("dfs.http.policy".to_string(), "HTTPS_ONLY".to_string()),
+        // TODO: "Privileged ports" don't really make sense in K8s, but we ought to sort out TLS anyway
+        (
+            "ignore.secure.ports.for.testing".to_string(),
+            "true".to_string(),
+        ),
+        (
+            "dfs.journalnode.kerberos.principal".to_string(),
+            format!("jn/{}@{}", namenode_fqdn, kerberos_realm),
+        ),
+        (
+            "dfs.journalnode.keytab.file".to_string(),
+            "/kerberos/jn.service.keytab".to_string(),
+        ),
+        (
+            "dfs.namenode.kerberos.principal".to_string(),
+            format!("nn/{}@{}", namenode_fqdn, kerberos_realm),
+        ),
+        (
+            "dfs.namenode.keytab.file".to_string(),
+            "/kerberos/nn.service.keytab".to_string(),
+        ),
+        (
+            "dfs.datanode.kerberos.principal".to_string(),
+            format!("dn/{}@{}", namenode_fqdn, kerberos_realm),
+        ),
+        (
+            "dfs.datanode.keytab.file".to_string(),
+            "/kerberos/dn.service.keytab".to_string(),
+        ),
+        // (
+        //     "dfs.namenode.kerberos.internal.spnego.principal".to_string(),
+        //     format!("HTTP/_HOST@{}", kerberos_realm),
+        // ),
+        // (
+        //     "dfs.web.authentication.kerberos.principal".to_string(),
+        //     format!("HTTP/_HOST@{}", kerberos_realm),
+        // ),
+        // (
+        //     "dfs.web.authentication.kerberos.keytab".to_string(),
+        //     "/kerberos/spnego.service.keytab".to_string(),
+        // ),
     ]
     .into_iter()
     .chain((0..hdfs.spec.namenode_replicas.unwrap_or(1)).flat_map(|i| {
@@ -240,11 +314,38 @@ pub async fn reconcile_hdfs(
             data: Some(BTreeMap::from([
                 (
                     "core-site.xml".to_string(),
-                    hadoop_config_xml([("fs.defaultFS", format!("hdfs://{}/", name))]),
+                    hadoop_config_xml([
+                        ("fs.defaultFS", format!("hdfs://{}/", name)),
+                        // (
+                        //     "hadoop.registry.kerberos.realm",
+                        //     hdfs.spec
+                        //         .kerberos
+                        //         .realm
+                        //         .clone()
+                        //         .unwrap_or_else(|| "local".to_string()),
+                        // ),
+                        ("hadoop.security.authentication", "kerberos".to_string()),
+                        ("hadoop.security.authorization", "kerberos".to_string()),
+                        // ("hadoop.http.authentication.type", "kerberos".to_string()),
+                        // (
+                        //     "hadoop.http.authentication.kerberos.principal",
+                        //     format!("HTTP/_HOST@{}", kerberos_realm),
+                        // ),
+                        // (
+                        //     "hadoop.http.authentication.kerberos.keytab",
+                        //     "/kerberos/spnego.service.keytab".to_string(),
+                        // ),
+                    ]),
                 ),
                 (
                     "hdfs-site.xml".to_string(),
                     hadoop_config_xml(hdfs_site_config),
+                ),
+                ("krb5.conf".to_string(), hdfs.spec.kerberos.to_string()),
+                (
+                    "log4j.properties".to_string(),
+                    // "log4j.logger.org.apache.hadoop.security=DEBUG".to_string(),
+                    include_str!("log4j.properties").to_string(),
                 ),
             ])),
             ..ConfigMap::default()
@@ -298,14 +399,24 @@ pub async fn reconcile_hdfs(
                 }]),
                 ..hadoop_container()
             }],
-            volumes: Some(vec![Volume {
-                name: "config".to_string(),
-                config_map: Some(ConfigMapVolumeSource {
-                    name: Some(format!("{}-config", name)),
-                    ..ConfigMapVolumeSource::default()
-                }),
-                ..Volume::default()
-            }]),
+            volumes: Some(vec![
+                Volume {
+                    name: "config".to_string(),
+                    config_map: Some(ConfigMapVolumeSource {
+                        name: Some(format!("{}-config", name)),
+                        ..ConfigMapVolumeSource::default()
+                    }),
+                    ..Volume::default()
+                },
+                Volume {
+                    name: "kerberos".to_string(),
+                    secret: Some(SecretVolumeSource {
+                        secret_name: Some(format!("{}-kerberos", journalnode_name)),
+                        ..SecretVolumeSource::default()
+                    }),
+                    ..Volume::default()
+                },
+            ]),
             host_network: Some(true),
             dns_policy: Some("ClusterFirstWithHostNet".to_string()),
             ..PodSpec::default()
@@ -423,14 +534,24 @@ pub async fn reconcile_hdfs(
                     ..hadoop_container()
                 },
             ],
-            volumes: Some(vec![Volume {
-                name: "config".to_string(),
-                config_map: Some(ConfigMapVolumeSource {
-                    name: Some(format!("{}-config", name)),
-                    ..ConfigMapVolumeSource::default()
-                }),
-                ..Volume::default()
-            }]),
+            volumes: Some(vec![
+                Volume {
+                    name: "config".to_string(),
+                    config_map: Some(ConfigMapVolumeSource {
+                        name: Some(format!("{}-config", name)),
+                        ..ConfigMapVolumeSource::default()
+                    }),
+                    ..Volume::default()
+                },
+                Volume {
+                    name: "kerberos".to_string(),
+                    secret: Some(SecretVolumeSource {
+                        secret_name: Some(format!("{}-kerberos", namenode_name)),
+                        ..SecretVolumeSource::default()
+                    }),
+                    ..Volume::default()
+                },
+            ]),
             host_network: Some(true),
             dns_policy: Some("ClusterFirstWithHostNet".to_string()),
             ..PodSpec::default()
@@ -506,59 +627,11 @@ pub async fn reconcile_hdfs(
             ..ObjectMeta::default()
         }),
         spec: Some(PodSpec {
-            // init_containers: Some(vec![Container {
-            //     name: "format-namenode".to_string(),
-            //     image: Some("teozkr/hadoop:3.3.1".to_string()),
-            //     args: Some(vec![
-            //         "sh".to_string(),
-            //         "-c".to_string(),
-            //         "stat /data/current || /opt/hadoop/bin/hdfs namenode -format -noninteractive"
-            //             .to_string(),
-            //     ]),
-            //     env: Some(vec![
-            //         EnvVar {
-            //             name: "HADOOP_HOME".to_string(),
-            //             value: Some("/opt/hadoop".to_string()),
-            //             ..EnvVar::default()
-            //         },
-            //         EnvVar {
-            //             name: "HADOOP_CONF_DIR".to_string(),
-            //             value: Some("/config".to_string()),
-            //             ..EnvVar::default()
-            //         },
-            //     ]),
-            //     volume_mounts: Some(vec![
-            //         VolumeMount {
-            //             mount_path: "/data".to_string(),
-            //             name: "data".to_string(),
-            //             ..VolumeMount::default()
-            //         },
-            //         VolumeMount {
-            //             mount_path: "/config".to_string(),
-            //             name: "config".to_string(),
-            //             ..VolumeMount::default()
-            //         },
-            //     ]),
-            //     ..Container::default()
-            // }]),
             containers: vec![Container {
                 name: "datanode".to_string(),
-                image: Some("teozkr/hadoop:3.3.1".to_string()),
                 args: Some(vec![
                     "/opt/hadoop/bin/hdfs".to_string(),
                     "datanode".to_string(),
-                ]),
-                env: Some(vec![
-                    EnvVar {
-                        name: "HADOOP_HOME".to_string(),
-                        value: Some("/opt/hadoop".to_string()),
-                        ..EnvVar::default()
-                    },
-                    EnvVar {
-                        name: "HADOOP_CONF_DIR".to_string(),
-                        value: Some("/config".to_string()),
-                        ..EnvVar::default()
-                    },
                 ]),
                 ports: Some(vec![
                     ContainerPort {
@@ -580,28 +653,26 @@ pub async fn reconcile_hdfs(
                         ..ContainerPort::default()
                     },
                 ]),
-                volume_mounts: Some(vec![
-                    VolumeMount {
-                        mount_path: "/data".to_string(),
-                        name: "data".to_string(),
-                        ..VolumeMount::default()
-                    },
-                    VolumeMount {
-                        mount_path: "/config".to_string(),
-                        name: "config".to_string(),
-                        ..VolumeMount::default()
-                    },
-                ]),
-                ..Container::default()
+                ..hadoop_container()
             }],
-            volumes: Some(vec![Volume {
-                name: "config".to_string(),
-                config_map: Some(ConfigMapVolumeSource {
-                    name: Some(format!("{}-config", name)),
-                    ..ConfigMapVolumeSource::default()
-                }),
-                ..Volume::default()
-            }]),
+            volumes: Some(vec![
+                Volume {
+                    name: "config".to_string(),
+                    config_map: Some(ConfigMapVolumeSource {
+                        name: Some(format!("{}-config", name)),
+                        ..ConfigMapVolumeSource::default()
+                    }),
+                    ..Volume::default()
+                },
+                Volume {
+                    name: "kerberos".to_string(),
+                    secret: Some(SecretVolumeSource {
+                        secret_name: Some(format!("{}-kerberos", datanode_name)),
+                        ..SecretVolumeSource::default()
+                    }),
+                    ..Volume::default()
+                },
+            ]),
             host_network: Some(true),
             dns_policy: Some("ClusterFirstWithHostNet".to_string()),
             ..PodSpec::default()
