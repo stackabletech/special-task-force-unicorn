@@ -102,11 +102,16 @@ fn hadoop_container() -> Container {
                 value: Some("/config".to_string()),
                 ..EnvVar::default()
             },
-            EnvVar {
-                name: "HADOOP_JAAS_DEBUG".to_string(),
-                value: Some("true".to_string()),
-                ..EnvVar::default()
-            },
+            // EnvVar {
+            //     name: "KRB5_TRACE".to_string(),
+            //     value: Some("/dev/stdout".to_string()),
+            //     ..EnvVar::default()
+            // },
+            // EnvVar {
+            //     name: "HADOOP_JAAS_DEBUG".to_string(),
+            //     value: Some("true".to_string()),
+            //     ..EnvVar::default()
+            // },
             EnvVar {
                 name: "JAVA_TOOL_OPTIONS".to_string(),
                 value: Some(
@@ -114,6 +119,7 @@ fn hadoop_container() -> Container {
                         "-Djava.security.krb5.conf=/config/krb5.conf",
                         // "-Dsun.security.spnego.debug=true",
                         // "-Dsun.security.krb5.debug=true",
+                        // "-Djava.security.debug=all",
                     ]
                     .join(" "),
                 ),
@@ -276,13 +282,11 @@ pub async fn reconcile_hdfs(
             "dfs.datanode.keytab.file".to_string(),
             "/kerberos/dn.service.keytab".to_string(),
         ),
-        // (
-        //     "dfs.namenode.kerberos.internal.spnego.principal".to_string(),
-        //     format!("HTTP/_HOST@{}", kerberos_realm),
-        // ),
+        // JournalNode SPNEGO
         // (
         //     "dfs.web.authentication.kerberos.principal".to_string(),
-        //     format!("HTTP/_HOST@{}", kerberos_realm),
+        //     format!("HTTP/stackable-knode-1.kvm@{}", kerberos_realm),
+        //     // format!("HTTP/_HOST@{}", kerberos_realm),
         // ),
         // (
         //     "dfs.web.authentication.kerberos.keytab".to_string(),
@@ -316,19 +320,13 @@ pub async fn reconcile_hdfs(
                     "core-site.xml".to_string(),
                     hadoop_config_xml([
                         ("fs.defaultFS", format!("hdfs://{}/", name)),
-                        // (
-                        //     "hadoop.registry.kerberos.realm",
-                        //     hdfs.spec
-                        //         .kerberos
-                        //         .realm
-                        //         .clone()
-                        //         .unwrap_or_else(|| "local".to_string()),
-                        // ),
                         ("hadoop.security.authentication", "kerberos".to_string()),
-                        ("hadoop.security.authorization", "kerberos".to_string()),
+                        ("hadoop.security.authorization", "false".to_string()),
+                        // JournalNode/WebHDFS SPNEGO
                         // ("hadoop.http.authentication.type", "kerberos".to_string()),
                         // (
                         //     "hadoop.http.authentication.kerberos.principal",
+                        //     // format!("HTTP/stackable-knode-1.kvm@{}", kerberos_realm),
                         //     format!("HTTP/_HOST@{}", kerberos_realm),
                         // ),
                         // (
