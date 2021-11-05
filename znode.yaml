@@ -1,0 +1,8 @@
+apiVersion: zookeeper.stackable.tech/v1alpha1
+kind: ZookeeperZnode
+metadata:
+  name: hdfs-znode
+spec:
+  clusterRef:
+    name: zkc
+    namespace: default
