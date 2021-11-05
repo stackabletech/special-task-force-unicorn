@@ -5,10 +5,10 @@ use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec},
         core::v1::{
-            ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EnvVar,
-            PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec,
-            ResourceRequirements, SecretVolumeSource, Service, ServicePort, ServiceSpec, Volume,
-            VolumeMount,
+            ConfigMap, ConfigMapKeySelector, ConfigMapVolumeSource, Container, ContainerPort,
+            EnvVar, EnvVarSource, PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec,
+            PodTemplateSpec, ResourceRequirements, SecretVolumeSource, Service, ServicePort,
+            ServiceSpec, Volume, VolumeMount,
         },
     },
     apimachinery::pkg::{
@@ -243,7 +243,10 @@ pub async fn reconcile_hdfs(
             "dfs.ha.automatic-failover.enabled".to_string(),
             "true".to_string(),
         ),
-        ("ha.zookeeper.quorum".to_string(), "zkc:2181".to_string()),
+        (
+            "ha.zookeeper.quorum".to_string(),
+            "${env.ZOOKEEPER_BROKERS}".to_string(),
+        ),
         (
             "dfs.block.access.token.enable".to_string(),
             "true".to_string(),
@@ -484,6 +487,22 @@ pub async fn reconcile_hdfs(
     )
     .await
     .context(ApplyPeerService)?;
+    let mut namenode_zkfc_container = hadoop_container();
+    namenode_zkfc_container
+        .env
+        .get_or_insert_with(Vec::new)
+        .push(EnvVar {
+            name: "ZOOKEEPER_BROKERS".to_string(),
+            value_from: Some(EnvVarSource {
+                config_map_key_ref: Some(ConfigMapKeySelector {
+                    name: hdfs.spec.namenode_znode_config_map,
+                    key: "ZOOKEEPER_BROKERS".to_string(),
+                    ..ConfigMapKeySelector::default()
+                }),
+                ..EnvVarSource::default()
+            }),
+            ..EnvVar::default()
+        });
     let namenode_pod_template = PodTemplateSpec {
         metadata: Some(ObjectMeta {
             labels: Some(namenode_pod_labels.clone()),
@@ -501,7 +520,7 @@ pub async fn reconcile_hdfs(
                      /opt/hadoop/bin/hdfs zkfc -formatZK -nonInteractive || true"
                         .to_string(),
                 ]),
-                ..hadoop_container()
+                ..namenode_zkfc_container.clone()
             }]),
             containers: vec![
                 Container {
@@ -529,7 +548,7 @@ pub async fn reconcile_hdfs(
                 Container {
                     name: "zkfc".to_string(),
                     args: Some(vec!["/opt/hadoop/bin/hdfs".to_string(), "zkfc".to_string()]),
-                    ..hadoop_container()
+                    ..namenode_zkfc_container
                 },
             ],
             volumes: Some(vec![

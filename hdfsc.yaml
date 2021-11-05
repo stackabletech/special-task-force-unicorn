@@ -6,6 +6,16 @@ spec:
   namenodeReplicas: 2
   datanodeReplicas: 3
   journalnodeReplicas: 3
+  namenodeZnodeConfigMap: hdfsc-namenode-znode
   kerberos:
     realm: STACKABLE
     kdc: stackable-krb-kdc.kvm
+---
+apiVersion: zookeeper.stackable.tech/v1alpha1
+kind: ZookeeperZnode
+metadata:
+  name: hdfsc-namenode-znode
+spec:
+  clusterRef:
+    name: zkc
+    namespace: default

@@ -23,6 +23,8 @@ pub struct HdfsClusterSpec {
     pub datanode_replicas: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub journalnode_replicas: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namenode_znode_config_map: Option<String>,
     #[serde(default)]
     pub kerberos: KerberosConfig,
 }
