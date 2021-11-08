@@ -4,3 +4,4 @@ metadata:
   name: zkc
 spec:
   replicas: 3
+  stopped: false
