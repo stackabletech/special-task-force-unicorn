@@ -2636,5 +2636,4 @@ dependencies = [
  "tokio-executor",
  "tokio-zookeeper",
  "tracing",
- "tracing-subscriber 0.2.25",
 ]
